@@ -33,6 +33,9 @@ namespace UnityEditor.AddressableAssets.Build.DataBuilders
                 BundleCompression = ConverBundleCompressiontToBuildCompression(m_settings.DefaultGroup.GetSchema<BundledAssetGroupSchema>().Compression);
             else
                 BundleCompression = target == BuildTarget.WebGL ? BuildCompression.LZ4Runtime : BuildCompression.LZMA;
+
+            //** addressables: the same bundles CRC on unity version change //TODO: AddressableAssetSettings option
+            ContentBuildFlags |= UnityEditor.Build.Content.ContentBuildFlags.StripUnityVersion;
         }
 
         private BuildCompression ConverBundleCompressiontToBuildCompression(
