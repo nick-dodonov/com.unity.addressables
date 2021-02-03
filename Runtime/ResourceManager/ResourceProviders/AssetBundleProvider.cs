@@ -373,11 +373,32 @@ namespace UnityEngine.ResourceManagement.ResourceProviders
                     }
                     else
                     {
-                        var exception = new Exception(string.Format(
-                            "RemoteAssetBundleProvider unable to load from url {0}, result='{1}'.", webReq.url,
-                            webReq.error));
-                        m_ProvideHandle.Complete<AssetBundleResource>(null, false, exception);
-                        m_Completed = true;
+                        //** addressables: retry via UI feature (without wrappers around load methods)
+                        ResourceProgressManager.Instance.ProcessError(errand =>
+                        {
+                            Debug.LogFormat("AssetBundleProvider: ProcessError: {0} - {1}", m_Options.BundleName, errand);
+                            switch (errand)
+                            {
+                                case ResourceProgressManager.ErrorActionErrand.Repeat:
+
+                                    m_Retries = 0;
+                                    Debug.LogFormat(message);
+                                    BeginOperation();
+                                    m_Retries++;
+
+                                    break;
+
+                                default:
+
+                                    var exception = new Exception(string.Format(
+                                        "RemoteAssetBundleProvider unable to load from url {0}, result='{1}'.", webReq.url,
+                                        webReq.error));
+                                    m_ProvideHandle.Complete<AssetBundleResource>(null, false, exception);
+                                    m_Completed = true;
+
+                                    break;
+                            }
+                        });
                     }
                 }
             }
