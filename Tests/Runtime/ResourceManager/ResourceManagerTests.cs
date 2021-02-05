@@ -8,6 +8,8 @@ using UnityEngine.ResourceManagement.ResourceProviders;
 using UnityEngine.ResourceManagement.Util;
 using UnityEngine.TestTools;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using UnityEngine.Networking;
 using UnityEngine.TestTools.Constraints;
 
@@ -276,6 +278,81 @@ namespace UnityEngine.ResourceManagement.Tests
                 yield return null;
 
             Assert.AreEqual(totalOperations, numberOfCompletedOperations);
+        }
+
+        //** addressables: test to show async deferred completed event race-condition issue:
+        //  * either some events are skipped (when add is between process and clear in ExecuteDeferredCallbacks)
+        //  * either mem-damage (add in RegisterForDeferredCallback isn't threadsafe too)
+        //it's easier to reproduce with little sleeps before Clear() or with timed barrier before Add() in List m_DeferredCompleteCallbacks
+        private class Barrier
+        {
+            private int count;
+            private readonly TaskCompletionSource<object> tcs = new TaskCompletionSource<object>();
+            public Barrier(int waitCount) => count = waitCount;
+            public void ReleaseOne()
+            {
+                var value = Interlocked.Decrement(ref count);
+                if (value == 0)
+                    tcs.SetResult(null);
+            }
+            public Task Task => tcs.Task;
+        }
+
+        private class TestOp : AsyncOperationBase<int>
+        {
+            private readonly Barrier barrier;
+            public TestOp(Barrier barrier) => this.barrier = barrier;
+            protected override void Execute()
+            {
+                //async complete in separate thread (like WebRequest do)
+                System.Threading.Tasks.Task.Run(() =>
+                {
+                    Complete(0, false, "error");
+                    barrier.ReleaseOne();
+                });
+            }
+        }
+
+        [Test] //async test workaround - Unity's nunit framework doesn't support async task tests =(
+        public void DeferredAsyncCompleted() => Task.Run(DeferredAsyncCompletedAsync).GetAwaiter().GetResult();
+        private async Task DeferredAsyncCompletedAsync()
+        {
+            const int opTotalCount = 500;
+            var barrier = new Barrier(opTotalCount);
+
+            var updateCancellationToken = new CancellationTokenSource();
+            var _ = Task.Factory.StartNew(() => {
+                    //handle update as soon as possible to force concurrent operation processing and registration
+                    while (!updateCancellationToken.IsCancellationRequested)
+                        m_ResourceManager.Update(0);
+                },
+                updateCancellationToken.Token,
+                TaskCreationOptions.LongRunning, //don't use pool - new thread for updates
+                TaskScheduler.Default);
+
+            var opCompleted = 0;
+            for (var i = 0; i < opTotalCount; ++i)
+            {
+                var op = new TestOp(barrier);
+                op.Completed += x =>
+                {
+                    ++opCompleted;
+                };
+                op.Start(m_ResourceManager, default, null);
+            }
+
+
+            var operationsTask = barrier.Task;
+            const int completeDelayMs = 10000;
+            if (await Task.WhenAny(operationsTask, Task.Delay(completeDelayMs)) != operationsTask)
+                throw new Exception($"failed to complete {opTotalCount} operations in {completeDelayMs} ms");
+
+            updateCancellationToken.Cancel();
+            updateCancellationToken.Token.WaitHandle.WaitOne();
+
+            m_ResourceManager.Update(0); //force the latest ExecuteDeferredCallbacks to pass
+
+            Assert.AreEqual(opCompleted, opTotalCount);
         }
     }
 }
