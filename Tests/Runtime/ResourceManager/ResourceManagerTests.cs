@@ -280,10 +280,7 @@ namespace UnityEngine.ResourceManagement.Tests
             Assert.AreEqual(totalOperations, numberOfCompletedOperations);
         }
 
-        //** addressables: test to show async deferred completed event race-condition issue:
-        //  * either some events are skipped (when add is between process and clear in ExecuteDeferredCallbacks)
-        //  * either mem-damage (add in RegisterForDeferredCallback isn't threadsafe too)
-        //it's easier to reproduce with little sleeps before Clear() or with timed barrier before Add() in List m_DeferredCompleteCallbacks
+        //** addressables: test for concurrent async deferred completed events (register / process race-condition checking)
         private class Barrier
         {
             private int count;
@@ -314,8 +311,8 @@ namespace UnityEngine.ResourceManagement.Tests
         }
 
         [Test] //async test workaround - Unity's nunit framework doesn't support async task tests =(
-        public void DeferredAsyncCompleted() => Task.Run(DeferredAsyncCompletedAsync).GetAwaiter().GetResult();
-        private async Task DeferredAsyncCompletedAsync()
+        public void DeferredAsyncCompleted_Concurrent() => Task.Run(DeferredAsyncCompleted_ConcurrentAsync).GetAwaiter().GetResult();
+        private async Task DeferredAsyncCompleted_ConcurrentAsync()
         {
             const int opTotalCount = 500;
             var barrier = new Barrier(opTotalCount);
@@ -340,7 +337,6 @@ namespace UnityEngine.ResourceManagement.Tests
                 };
                 op.Start(m_ResourceManager, default, null);
             }
-
 
             var operationsTask = barrier.Task;
             const int completeDelayMs = 10000;
