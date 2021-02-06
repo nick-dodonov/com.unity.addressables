@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using UnityEngine.Networking;
@@ -152,7 +153,8 @@ namespace UnityEngine.ResourceManagement
         Dictionary<int, IAsyncOperation> m_AssetOperationCache = new Dictionary<int, IAsyncOperation>();
         HashSet<InstanceOperation> m_TrackedInstanceOperations = new HashSet<InstanceOperation>();
         DelegateList<float> m_UpdateCallbacks = DelegateList<float>.CreateWithGlobalCache();
-        List<IAsyncOperation> m_DeferredCompleteCallbacks = new List<IAsyncOperation>();
+        //** addressables: fix concurrent register/process race-condition of deferred complete events
+        ConcurrentQueue<IAsyncOperation> m_DeferredCompleteCallbacks = new ConcurrentQueue<IAsyncOperation>();
 
         Action<AsyncOperationHandle, DiagnosticEventType, int, object> m_obsoleteDiagnosticsHandler; // For use in working with Obsolete RegisterDiagnosticCallback method.
         Action<DiagnosticEventContext> m_diagnosticsHandler;
@@ -984,19 +986,20 @@ namespace UnityEngine.ResourceManagement
 
         private void ExecuteDeferredCallbacks()
         {
-            for (int i = 0; i < m_DeferredCompleteCallbacks.Count; i++)
+            //** addressables: fix concurrent register/process race-condition of deferred complete events
+            while (m_DeferredCompleteCallbacks.TryDequeue(out var op))
             {
-                m_DeferredCompleteCallbacks[i].InvokeCompletionEvent();
-                m_DeferredCompleteCallbacks[i].DecrementReferenceCount();
+                op.InvokeCompletionEvent();
+                op.DecrementReferenceCount();
             }
-            m_DeferredCompleteCallbacks.Clear();
         }
 
         internal void RegisterForDeferredCallback(IAsyncOperation op, bool incrementRefCount = true)
         {
             if (incrementRefCount)
                 op.IncrementReferenceCount();
-            m_DeferredCompleteCallbacks.Add(op);
+            //** addressables: fix concurrent register/process race-condition of deferred complete events
+            m_DeferredCompleteCallbacks.Enqueue(op);
             RegisterForCallbacks();
         }
 
